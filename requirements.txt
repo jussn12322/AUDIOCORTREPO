@@ -1,0 +1,10 @@
+# Dependencias para AudioCort - Limpiador de Silencios
+# ======================================================
+
+# Framework web para la interfaz de usuario
+streamlit>=1.31.0
+
+# Biblioteca para manipulación de audio
+# Permite cargar, editar, detectar silencios y exportar audio
+# Requiere ffmpeg instalado en el sistema para trabajar con múltiples formatos
+pydub>=0.25.1
