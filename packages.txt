@@ -1,1 +1,3 @@
 ffmpeg
+libavcodec-extra
+python3-dev

@@ -8,3 +8,6 @@ streamlit>=1.31.0
 # Permite cargar, editar, detectar silencios y exportar audio
 # Requiere ffmpeg instalado en el sistema para trabajar con múltiples formatos
 pydub>=0.25.1
+
+# Dependencias adicionales para compatibilidad
+numpy>=1.24.0
