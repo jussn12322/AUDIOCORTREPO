@@ -17,12 +17,14 @@
 
 ```toml
 [supabase]
-host = "db.pyejfpuzjvpdaxpbcrvi.supabase.co"
+host = "aws-0-us-west-1.pooler.supabase.com"
 database = "postgres"
-user = "postgres"
+user = "postgres.pyejfpuzjvpdaxpbcrvi"
 password = "TU_PASSWORD_REAL_AQUI"
-port = "5432"
+port = "6543"
 ```
+
+**IMPORTANTE:** Usa el puerto **6543** (connection pooling) en lugar de 5432 (conexión directa)
 
 6. Click **Save**
 7. La app se redesplegiará automáticamente
