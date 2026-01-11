@@ -625,11 +625,24 @@ if uploaded_file is not None:
 
                 st.divider()
 
-                # Reproductor
-                st.subheader("🎧 Paso 3: Escucha el resultado")
+                # Leer archivo de audio procesado
                 with open(temp_output, "rb") as audio_file:
                     audio_bytes = audio_file.read()
-                    st.audio(audio_bytes, format="audio/mp3")
+
+                # Guardar en base de datos inmediatamente después de procesar
+                save_to_database(
+                    uploaded_file.name,
+                    audio_bytes,
+                    original_duration,
+                    cleaned_duration,
+                    silence_thresh,
+                    min_silence_len,
+                    keep_silence
+                )
+
+                # Reproductor
+                st.subheader("🎧 Paso 3: Escucha el resultado")
+                st.audio(audio_bytes, format="audio/mp3")
 
                 st.divider()
 
@@ -647,17 +660,6 @@ if uploaded_file is not None:
                 )
 
                 st.success(f"💾 Listo para descargar: **{output_filename}**")
-
-                # Guardar en base de datos
-                save_to_database(
-                    uploaded_file.name,
-                    audio_bytes,
-                    original_duration,
-                    cleaned_duration,
-                    silence_thresh,
-                    min_silence_len,
-                    keep_silence
-                )
 
         except Exception as e:
             st.error(f"❌ Error durante el procesamiento: {str(e)}")
