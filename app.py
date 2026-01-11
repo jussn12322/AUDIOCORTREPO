@@ -11,6 +11,9 @@ import os
 import tempfile
 import subprocess
 import json
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import numpy as np
 
 
 # ======================== CONFIGURACIÓN DE LA PÁGINA ========================
@@ -177,6 +180,73 @@ def merge_segments_with_ffmpeg(input_file, segments, output_file, padding_ms):
         return False
 
 
+def visualize_segments(total_duration, segments, padding_ms):
+    """
+    Crea una visualización de los segmentos de audio mantenidos vs eliminados.
+    """
+    fig, ax = plt.subplots(figsize=(12, 4))
+
+    # Configurar el gráfico
+    ax.set_xlim(0, total_duration)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel('Tiempo (segundos)', fontsize=12)
+    ax.set_yticks([])
+    ax.set_title('Visualización de Segmentos: Verde = Mantenido | Rojo = Eliminado',
+                 fontsize=14, fontweight='bold')
+
+    padding_s = padding_ms / 1000.0
+
+    # Dibujar segmentos mantenidos (verde)
+    for start, end in segments:
+        start_with_padding = max(0, start - padding_s)
+        end_with_padding = min(total_duration, end + padding_s)
+        width = end_with_padding - start_with_padding
+
+        rect = patches.Rectangle(
+            (start_with_padding, 0.1), width, 0.8,
+            linewidth=1, edgecolor='darkgreen', facecolor='#4CAF50', alpha=0.7
+        )
+        ax.add_patch(rect)
+
+    # Crear lista de segmentos eliminados (silencios)
+    silence_segments = []
+
+    # Silencio al inicio
+    if segments[0][0] > 0.1:
+        silence_segments.append((0, segments[0][0]))
+
+    # Silencios entre segmentos
+    for i in range(len(segments) - 1):
+        silence_start = segments[i][1]
+        silence_end = segments[i + 1][0]
+        if silence_end - silence_start > 0.1:
+            silence_segments.append((silence_start, silence_end))
+
+    # Silencio al final
+    if segments[-1][1] < total_duration - 0.1:
+        silence_segments.append((segments[-1][1], total_duration))
+
+    # Dibujar segmentos eliminados (rojo)
+    for start, end in silence_segments:
+        width = end - start
+        rect = patches.Rectangle(
+            (start, 0.1), width, 0.8,
+            linewidth=1, edgecolor='darkred', facecolor='#f44336', alpha=0.5
+        )
+        ax.add_patch(rect)
+
+    # Línea de tiempo
+    ax.axhline(y=0.5, color='black', linewidth=0.5, alpha=0.3)
+
+    # Agregar marcadores de tiempo cada 10 segundos
+    time_markers = np.arange(0, total_duration, max(10, total_duration / 10))
+    for t in time_markers:
+        ax.axvline(x=t, color='gray', linewidth=0.5, alpha=0.3, linestyle='--')
+
+    plt.tight_layout()
+    return fig
+
+
 # ======================== TÍTULO Y DESCRIPCIÓN ========================
 st.title("🎵 AudioCort - Limpiador de Silencios")
 st.markdown("""
@@ -309,8 +379,21 @@ if uploaded_file is not None:
 
                 st.divider()
 
+                # Visualización de segmentos
+                st.subheader("📊 Paso 2: Visualización de Segmentos")
+                st.markdown("**Verde** = Audio mantenido | **Rojo** = Silencios eliminados")
+
+                try:
+                    fig = visualize_segments(original_duration, nonsilent_segments, keep_silence)
+                    st.pyplot(fig)
+                    plt.close(fig)
+                except Exception as e:
+                    st.warning(f"No se pudo generar la visualización: {e}")
+
+                st.divider()
+
                 # Reproductor
-                st.subheader("🎧 Paso 2: Escucha el resultado")
+                st.subheader("🎧 Paso 3: Escucha el resultado")
                 with open(temp_output, "rb") as audio_file:
                     audio_bytes = audio_file.read()
                     st.audio(audio_bytes, format="audio/mp3")
@@ -318,7 +401,7 @@ if uploaded_file is not None:
                 st.divider()
 
                 # Descarga
-                st.subheader("📥 Paso 3: Descarga tu archivo")
+                st.subheader("📥 Paso 4: Descarga tu archivo")
                 original_name = os.path.splitext(uploaded_file.name)[0]
                 output_filename = f"{original_name}_limpio.mp3"
 

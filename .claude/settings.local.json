@@ -3,7 +3,12 @@
     "allow": [
       "Bash(git init:*)",
       "Bash(git add:*)",
-      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial commit: AudioCort - Limpiador de Silencios\n\nAplicación completa de Streamlit para eliminar silencios de videos y audios.\n\nCaracterísticas:\n- Soporte para múltiples formatos \\(MP4, MOV, MKV, MP3, WAV, M4A\\)\n- Detección y eliminación inteligente de silencios\n- Parámetros configurables \\(umbral, duración, padding\\)\n- Exportación a MP3 de alta calidad\n- Interfaz intuitiva con preview y descarga\n- Estadísticas de tiempo ahorrado\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial commit: AudioCort - Limpiador de Silencios\n\nAplicación completa de Streamlit para eliminar silencios de videos y audios.\n\nCaracterísticas:\n- Soporte para múltiples formatos \\(MP4, MOV, MKV, MP3, WAV, M4A\\)\n- Detección y eliminación inteligente de silencios\n- Parámetros configurables \\(umbral, duración, padding\\)\n- Exportación a MP3 de alta calidad\n- Interfaz intuitiva con preview y descarga\n- Estadísticas de tiempo ahorrado\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git branch:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix: Agregar dependencias del sistema para pydub\n\n- Agregar libavcodec-extra y python3-dev a packages.txt\n- Agregar numpy a requirements.txt para compatibilidad\n- Solucionar ModuleNotFoundError con pyaudioop\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git commit:*)"
     ]
   }
 }
