@@ -180,68 +180,120 @@ def merge_segments_with_ffmpeg(input_file, segments, output_file, padding_ms):
         return False
 
 
-def visualize_segments(total_duration, segments, padding_ms):
+def extract_waveform_data(audio_file, duration, max_samples=3000):
     """
-    Crea una visualización de los segmentos de audio mantenidos vs eliminados.
+    Extrae datos de forma de onda del archivo de audio usando ffmpeg.
+    Retorna array de amplitudes normalizadas.
     """
-    fig, ax = plt.subplots(figsize=(12, 4))
+    try:
+        # Extraer audio como datos PCM usando ffmpeg
+        cmd = [
+            'ffmpeg',
+            '-i', audio_file,
+            '-f', 's16le',  # PCM 16-bit signed little-endian
+            '-ac', '1',      # Mono
+            '-ar', '8000',   # Sample rate reducido para eficiencia
+            '-'
+        ]
 
-    # Configurar el gráfico
-    ax.set_xlim(0, total_duration)
-    ax.set_ylim(0, 1)
-    ax.set_xlabel('Tiempo (segundos)', fontsize=12)
-    ax.set_yticks([])
-    ax.set_title('Visualización de Segmentos: Verde = Mantenido | Rojo = Eliminado',
-                 fontsize=14, fontweight='bold')
+        result = subprocess.run(cmd, capture_output=True, check=False)
 
-    padding_s = padding_ms / 1000.0
+        if result.returncode != 0:
+            return None
 
-    # Dibujar segmentos mantenidos (verde)
-    for start, end in segments:
-        start_with_padding = max(0, start - padding_s)
-        end_with_padding = min(total_duration, end + padding_s)
-        width = end_with_padding - start_with_padding
+        # Convertir bytes a array numpy
+        audio_data = np.frombuffer(result.stdout, dtype=np.int16)
 
-        rect = patches.Rectangle(
-            (start_with_padding, 0.1), width, 0.8,
-            linewidth=1, edgecolor='darkgreen', facecolor='#4CAF50', alpha=0.7
-        )
-        ax.add_patch(rect)
+        # Normalizar a rango -1 a 1
+        audio_data = audio_data.astype(np.float32) / 32768.0
 
-    # Crear lista de segmentos eliminados (silencios)
-    silence_segments = []
+        # Submuestreo para visualización
+        if len(audio_data) > max_samples:
+            # Tomar promedios de bloques para mantener la forma general
+            block_size = len(audio_data) // max_samples
+            blocks = len(audio_data) // block_size
+            audio_data = audio_data[:blocks * block_size].reshape(blocks, block_size)
+            # Tomar el máximo absoluto de cada bloque para mantener picos
+            audio_data = np.array([block[np.argmax(np.abs(block))] for block in audio_data])
 
-    # Silencio al inicio
-    if segments[0][0] > 0.1:
-        silence_segments.append((0, segments[0][0]))
+        return audio_data
 
-    # Silencios entre segmentos
-    for i in range(len(segments) - 1):
-        silence_start = segments[i][1]
-        silence_end = segments[i + 1][0]
-        if silence_end - silence_start > 0.1:
-            silence_segments.append((silence_start, silence_end))
+    except Exception as e:
+        return None
 
-    # Silencio al final
-    if segments[-1][1] < total_duration - 0.1:
-        silence_segments.append((segments[-1][1], total_duration))
 
-    # Dibujar segmentos eliminados (rojo)
-    for start, end in silence_segments:
-        width = end - start
-        rect = patches.Rectangle(
-            (start, 0.1), width, 0.8,
-            linewidth=1, edgecolor='darkred', facecolor='#f44336', alpha=0.5
-        )
-        ax.add_patch(rect)
+def visualize_segments(audio_file, total_duration, segments, padding_ms):
+    """
+    Crea una visualización de forma de onda real con segmentos marcados.
+    """
+    # Extraer datos de forma de onda
+    waveform = extract_waveform_data(audio_file, total_duration)
 
-    # Línea de tiempo
-    ax.axhline(y=0.5, color='black', linewidth=0.5, alpha=0.3)
+    fig, ax = plt.subplots(figsize=(14, 5))
 
-    # Agregar marcadores de tiempo cada 10 segundos
-    time_markers = np.arange(0, total_duration, max(10, total_duration / 10))
-    for t in time_markers:
-        ax.axvline(x=t, color='gray', linewidth=0.5, alpha=0.3, linestyle='--')
+    if waveform is not None:
+        # Crear eje de tiempo
+        time_axis = np.linspace(0, total_duration, len(waveform))
+
+        # Dibujar forma de onda base en gris claro
+        ax.fill_between(time_axis, waveform, -waveform, color='#CCCCCC', alpha=0.3, linewidth=0)
+        ax.plot(time_axis, waveform, color='#888888', linewidth=0.5, alpha=0.5)
+
+        padding_s = padding_ms / 1000.0
+
+        # Crear máscaras para segmentos mantenidos
+        for start, end in segments:
+            start_with_padding = max(0, start - padding_s)
+            end_with_padding = min(total_duration, end + padding_s)
+
+            # Encontrar índices correspondientes
+            mask = (time_axis >= start_with_padding) & (time_axis <= end_with_padding)
+
+            # Dibujar segmento mantenido en verde
+            ax.fill_between(time_axis[mask], waveform[mask], -waveform[mask],
+                          color='#4CAF50', alpha=0.6, linewidth=0)
+            ax.plot(time_axis[mask], waveform[mask], color='#2E7D32', linewidth=0.8)
+
+        # Crear lista de segmentos eliminados
+        silence_segments = []
+
+        if segments[0][0] > 0.1:
+            silence_segments.append((0, segments[0][0]))
+
+        for i in range(len(segments) - 1):
+            silence_start = segments[i][1]
+            silence_end = segments[i + 1][0]
+            if silence_end - silence_start > 0.1:
+                silence_segments.append((silence_start, silence_end))
+
+        if segments[-1][1] < total_duration - 0.1:
+            silence_segments.append((segments[-1][1], total_duration))
+
+        # Marcar segmentos eliminados con overlay rojo semi-transparente
+        for start, end in silence_segments:
+            ax.axvspan(start, end, color='#f44336', alpha=0.2)
+            # Líneas verticales en los bordes
+            ax.axvline(x=start, color='#D32F2F', linewidth=1.5, linestyle='--', alpha=0.7)
+            ax.axvline(x=end, color='#D32F2F', linewidth=1.5, linestyle='--', alpha=0.7)
+
+        # Configuración del gráfico
+        ax.set_xlim(0, total_duration)
+        ax.set_ylim(-1.1, 1.1)
+        ax.set_xlabel('Tiempo (segundos)', fontsize=11, fontweight='bold')
+        ax.set_ylabel('Amplitud', fontsize=11, fontweight='bold')
+        ax.set_title('Forma de Onda del Audio: Verde = Mantenido | Rojo/Sombreado = Eliminado',
+                     fontsize=13, fontweight='bold', pad=15)
+
+        # Grid sutil
+        ax.grid(True, alpha=0.2, linestyle=':', linewidth=0.5)
+        ax.set_facecolor('#F8F9FA')
+
+    else:
+        # Fallback: visualización simple si no se puede extraer waveform
+        ax.text(0.5, 0.5, 'No se pudo generar la forma de onda\nMostrando vista simplificada',
+                ha='center', va='center', fontsize=12, color='#666')
+        ax.set_xlim(0, total_duration)
+        ax.set_ylim(0, 1)
 
     plt.tight_layout()
     return fig
@@ -384,7 +436,7 @@ if uploaded_file is not None:
                 st.markdown("**Verde** = Audio mantenido | **Rojo** = Silencios eliminados")
 
                 try:
-                    fig = visualize_segments(original_duration, nonsilent_segments, keep_silence)
+                    fig = visualize_segments(temp_input, original_duration, nonsilent_segments, keep_silence)
                     st.pyplot(fig)
                     plt.close(fig)
                 except Exception as e:
