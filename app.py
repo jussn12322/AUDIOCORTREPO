@@ -23,6 +23,10 @@ st.set_page_config(
     layout="centered"
 )
 
+# ======================== INICIALIZAR SESSION STATE ========================
+if 'history' not in st.session_state:
+    st.session_state.history = []
+
 
 # ======================== FUNCIONES AUXILIARES ========================
 def get_audio_duration(file_path):
@@ -299,6 +303,36 @@ def visualize_segments(audio_file, total_duration, segments, padding_ms):
     return fig
 
 
+def add_to_history(filename, audio_bytes, original_duration, cleaned_duration,
+                   silence_thresh, min_silence_len, keep_silence):
+    """
+    Agrega un audio procesado al historial.
+    Mantiene solo los últimos 10 elementos.
+    """
+    import datetime
+
+    history_item = {
+        'filename': filename,
+        'audio_data': audio_bytes,
+        'original_duration': original_duration,
+        'cleaned_duration': cleaned_duration,
+        'time_saved': original_duration - cleaned_duration,
+        'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        'settings': {
+            'umbral_silencio': silence_thresh,
+            'duracion_minima': min_silence_len,
+            'padding': keep_silence
+        }
+    }
+
+    # Agregar al inicio de la lista
+    st.session_state.history.insert(0, history_item)
+
+    # Mantener solo los últimos 10
+    if len(st.session_state.history) > 10:
+        st.session_state.history = st.session_state.history[:10]
+
+
 # ======================== TÍTULO Y DESCRIPCIÓN ========================
 st.title("🎵 AudioCort - Limpiador de Silencios")
 st.markdown("""
@@ -346,6 +380,47 @@ keep_silence = st.sidebar.slider(
 
 st.sidebar.divider()
 st.sidebar.info("💡 **Tip:** Si el audio resultante tiene cortes bruscos, aumenta el Padding/Margen.")
+
+# ======================== HISTORIAL ========================
+st.sidebar.divider()
+st.sidebar.header("📜 Historial de Procesamiento")
+
+if len(st.session_state.history) > 0:
+    st.sidebar.markdown(f"**{len(st.session_state.history)} archivo(s) procesado(s)**")
+
+    for idx, item in enumerate(st.session_state.history):
+        with st.sidebar.expander(f"🎵 {item['filename'][:25]}...", expanded=False):
+            st.markdown(f"**Procesado:** {item['timestamp']}")
+            st.markdown(f"**Duración Original:** {item['original_duration']:.1f}s")
+            st.markdown(f"**Duración Final:** {item['cleaned_duration']:.1f}s")
+            st.markdown(f"**Tiempo Ahorrado:** {item['time_saved']:.1f}s")
+
+            # Mostrar configuración usada
+            with st.expander("⚙️ Configuración usada"):
+                st.markdown(f"- Umbral: {item['settings']['umbral_silencio']} dB")
+                st.markdown(f"- Duración mín: {item['settings']['duracion_minima']} ms")
+                st.markdown(f"- Padding: {item['settings']['padding']} ms")
+
+            # Reproductor de audio
+            st.audio(item['audio_data'], format="audio/mp3")
+
+            # Botón de descarga
+            download_name = os.path.splitext(item['filename'])[0] + "_limpio.mp3"
+            st.download_button(
+                label="⬇️ Descargar",
+                data=item['audio_data'],
+                file_name=download_name,
+                mime="audio/mp3",
+                key=f"download_history_{idx}"
+            )
+
+    # Botón para limpiar historial
+    if st.sidebar.button("🗑️ Limpiar Historial", type="secondary"):
+        st.session_state.history = []
+        st.rerun()
+
+else:
+    st.sidebar.info("No hay archivos procesados aún")
 
 
 # ======================== CARGA DE ARCHIVO ========================
@@ -466,6 +541,17 @@ if uploaded_file is not None:
                 )
 
                 st.success(f"💾 Listo para descargar: **{output_filename}**")
+
+                # Agregar al historial
+                add_to_history(
+                    uploaded_file.name,
+                    audio_bytes,
+                    original_duration,
+                    cleaned_duration,
+                    silence_thresh,
+                    min_silence_len,
+                    keep_silence
+                )
 
         except Exception as e:
             st.error(f"❌ Error durante el procesamiento: {str(e)}")
