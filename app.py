@@ -3,13 +3,14 @@ Aplicación de Streamlit para Limpiar Silencios y Extraer Audio
 Autor: Desarrollador Senior de Python
 Descripción: Herramienta web que procesa videos o audios para eliminar silencios
              y exportar el resultado como MP3.
+Versión: 2.0 - Usa ffmpeg directamente (sin pydub)
 """
 
 import streamlit as st
 import os
 import tempfile
-from pydub import AudioSegment
-from pydub.silence import detect_nonsilent
+import subprocess
+import json
 
 
 # ======================== CONFIGURACIÓN DE LA PÁGINA ========================
@@ -18,6 +19,162 @@ st.set_page_config(
     page_icon="🎵",
     layout="centered"
 )
+
+
+# ======================== FUNCIONES AUXILIARES ========================
+def get_audio_duration(file_path):
+    """Obtiene la duración del audio en segundos usando ffprobe."""
+    try:
+        cmd = [
+            'ffprobe',
+            '-v', 'quiet',
+            '-print_format', 'json',
+            '-show_format',
+            file_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        data = json.loads(result.stdout)
+        return float(data['format']['duration'])
+    except:
+        return 0
+
+
+def detect_silence_with_ffmpeg(input_file, silence_thresh_db, min_silence_duration):
+    """
+    Detecta silencios usando ffmpeg directamente.
+    Retorna lista de tuplas (start, end) de segmentos NO silenciosos en segundos.
+    """
+    try:
+        # Convertir umbral de dB a amplitud (ffmpeg usa 0-1)
+        # -40dB ≈ 0.01, -60dB ≈ 0.001
+        silence_thresh = 10 ** (silence_thresh_db / 20)
+
+        cmd = [
+            'ffmpeg',
+            '-i', input_file,
+            '-af', f'silencedetect=noise={silence_thresh}:d={min_silence_duration/1000}',
+            '-f', 'null',
+            '-'
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        # Parsear la salida de ffmpeg para encontrar los silencios
+        silence_starts = []
+        silence_ends = []
+
+        for line in result.stderr.split('\n'):
+            if 'silence_start' in line:
+                try:
+                    start = float(line.split('silence_start: ')[1].split()[0])
+                    silence_starts.append(start)
+                except:
+                    pass
+            elif 'silence_end' in line:
+                try:
+                    end = float(line.split('silence_end: ')[1].split()[0])
+                    silence_ends.append(end)
+                except:
+                    pass
+
+        # Construir segmentos de audio (NO silencio)
+        total_duration = get_audio_duration(input_file)
+        nonsilent_segments = []
+
+        # Caso especial: si no hay silencios, retornar todo el audio
+        if len(silence_starts) == 0:
+            return [(0, total_duration)]
+
+        # Agregar segmento inicial si no empieza con silencio
+        if silence_starts[0] > 0.1:
+            nonsilent_segments.append((0, silence_starts[0]))
+
+        # Agregar segmentos entre silencios
+        for i in range(len(silence_ends)):
+            if i < len(silence_starts) - 1:
+                nonsilent_segments.append((silence_ends[i], silence_starts[i + 1]))
+
+        # Agregar segmento final si no termina con silencio
+        if len(silence_ends) > 0 and silence_ends[-1] < total_duration - 0.1:
+            nonsilent_segments.append((silence_ends[-1], total_duration))
+
+        return nonsilent_segments if nonsilent_segments else [(0, total_duration)]
+
+    except Exception as e:
+        st.error(f"Error al detectar silencios: {e}")
+        # En caso de error, retornar todo el archivo
+        duration = get_audio_duration(input_file)
+        return [(0, duration)]
+
+
+def merge_segments_with_ffmpeg(input_file, segments, output_file, padding_ms):
+    """
+    Une los segmentos de audio usando ffmpeg con padding.
+    """
+    try:
+        # Convertir padding de ms a segundos
+        padding_s = padding_ms / 1000.0
+
+        # Crear archivo de lista temporal para ffmpeg concat
+        concat_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt')
+        temp_segments = []
+
+        for i, (start, end) in enumerate(segments):
+            # Aplicar padding
+            start_with_padding = max(0, start - padding_s)
+            end_with_padding = end + padding_s
+
+            # Extraer segmento
+            segment_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp3')
+            segment_path = segment_file.name
+            segment_file.close()
+            temp_segments.append(segment_path)
+
+            duration = end_with_padding - start_with_padding
+
+            cmd = [
+                'ffmpeg',
+                '-i', input_file,
+                '-ss', str(start_with_padding),
+                '-t', str(duration),
+                '-acodec', 'libmp3lame',
+                '-b:a', '192k',
+                '-y',
+                segment_path
+            ]
+
+            subprocess.run(cmd, capture_output=True, check=True)
+            concat_file.write(f"file '{segment_path}'\n")
+
+        concat_file.close()
+
+        # Concatenar todos los segmentos
+        cmd = [
+            'ffmpeg',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', concat_file.name,
+            '-acodec', 'libmp3lame',
+            '-b:a', '192k',
+            '-y',
+            output_file
+        ]
+
+        subprocess.run(cmd, capture_output=True, check=True)
+
+        # Limpiar archivos temporales
+        os.unlink(concat_file.name)
+        for seg in temp_segments:
+            try:
+                os.unlink(seg)
+            except:
+                pass
+
+        return True
+
+    except Exception as e:
+        st.error(f"Error al unir segmentos: {e}")
+        return False
 
 
 # ======================== TÍTULO Y DESCRIPCIÓN ========================
@@ -36,8 +193,6 @@ st.sidebar.header("⚙️ Configuración de Procesamiento")
 st.sidebar.markdown("Ajusta los parámetros para detectar y eliminar silencios:")
 
 # Umbral de silencio en decibelios (dB)
-# Valores más bajos (ej: -60) detectan más silencios
-# Valores más altos (ej: -30) solo detectan silencios muy profundos
 silence_thresh = st.sidebar.slider(
     "🔇 Umbral de Silencio (dB)",
     min_value=-80,
@@ -48,7 +203,6 @@ silence_thresh = st.sidebar.slider(
 )
 
 # Duración mínima de silencio en milisegundos
-# Solo se eliminarán silencios que duren al menos este tiempo
 min_silence_len = st.sidebar.slider(
     "⏱️ Duración Mínima de Silencio (ms)",
     min_value=100,
@@ -58,8 +212,7 @@ min_silence_len = st.sidebar.slider(
     help="Silencios más cortos que esto se mantendrán en el audio."
 )
 
-# Margen de seguridad (padding) antes/después de cada segmento de audio
-# Evita cortes bruscos manteniendo un pequeño margen
+# Margen de seguridad (padding)
 keep_silence = st.sidebar.slider(
     "🛡️ Padding/Margen (ms)",
     min_value=0,
@@ -87,7 +240,6 @@ uploaded_file = st.file_uploader(
 if uploaded_file is not None:
     st.success(f"✅ Archivo cargado: **{uploaded_file.name}**")
 
-    # Determinar el tipo de archivo
     file_extension = uploaded_file.name.split(".")[-1].lower()
     is_video = file_extension in ["mp4", "mov", "mkv"]
 
@@ -96,93 +248,60 @@ if uploaded_file is not None:
     else:
         st.info("🎵 Archivo de audio detectado. Se procesará directamente.")
 
-    # Botón de procesamiento
     if st.button("🚀 Procesar y Limpiar Silencios", type="primary"):
-
-        # Crear archivos temporales para el procesamiento
         temp_input = None
         temp_output = None
 
         try:
             with st.spinner("⏳ Procesando... Esto puede tomar unos momentos."):
 
-                # ============ PASO 1: Guardar archivo subido temporalmente ============
+                # Guardar archivo subido
                 with tempfile.NamedTemporaryFile(delete=False, suffix=f".{file_extension}") as tmp_input:
                     tmp_input.write(uploaded_file.read())
                     temp_input = tmp_input.name
 
                 st.text("📥 Archivo guardado temporalmente...")
 
+                # Obtener duración original
+                original_duration = get_audio_duration(temp_input)
 
-                # ============ PASO 2: Cargar audio ============
-                # AudioSegment.from_file() es muy inteligente:
-                # - Detecta automáticamente el formato del archivo (mp4, mp3, wav, etc.)
-                # - Si es un VIDEO (mp4/mov/mkv), extrae la pista de audio automáticamente
-                # - Si es AUDIO, lo carga directamente
-                # - Requiere ffmpeg instalado en el sistema para formatos como mp4, m4a
-                st.text("🎧 Cargando y extrayendo audio...")
-                audio = AudioSegment.from_file(temp_input)
-
-
-                # ============ PASO 3: Detectar segmentos NO silenciosos ============
-                # detect_nonsilent() devuelve una lista de tuplas (inicio, fin) en ms
-                # Cada tupla representa un segmento de audio que NO es silencio
+                # Detectar silencios
                 st.text("🔍 Detectando silencios...")
-                nonsilent_ranges = detect_nonsilent(
-                    audio,
-                    min_silence_len=min_silence_len,  # Duración mínima del silencio
-                    silence_thresh=silence_thresh,     # Umbral de volumen
-                    seek_step=1                        # Precisión de búsqueda (1 ms)
+                nonsilent_segments = detect_silence_with_ffmpeg(
+                    temp_input,
+                    silence_thresh,
+                    min_silence_len
                 )
 
-                # Verificar si se encontraron segmentos de audio
-                if not nonsilent_ranges:
-                    st.warning("⚠️ No se detectaron segmentos de audio. El archivo podría estar completamente en silencio.")
+                if not nonsilent_segments:
+                    st.warning("⚠️ No se detectaron segmentos de audio.")
                     st.stop()
 
+                st.text(f"✅ Encontrados {len(nonsilent_segments)} segmentos de audio")
 
-                # ============ PASO 4: Unir segmentos no silenciosos ============
+                # Crear archivo de salida
+                temp_output = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+
+                # Unir segmentos
                 st.text("✂️ Eliminando silencios y uniendo segmentos...")
-
-                # Crear un nuevo AudioSegment vacío para almacenar el resultado
-                cleaned_audio = AudioSegment.empty()
-
-                # Iterar sobre cada segmento no silencioso
-                for start, end in nonsilent_ranges:
-                    # Aplicar padding (margen de seguridad) antes y después
-                    # max(0, ...) evita valores negativos en el inicio
-                    start_with_padding = max(0, start - keep_silence)
-                    end_with_padding = min(len(audio), end + keep_silence)
-
-                    # Extraer el segmento con padding y añadirlo al resultado
-                    segment = audio[start_with_padding:end_with_padding]
-                    cleaned_audio += segment
-
-
-                # ============ PASO 5: Exportar como MP3 ============
-                # Crear archivo temporal para el MP3 de salida
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_output:
-                    temp_output = tmp_output.name
-
-                st.text("💾 Exportando como MP3...")
-
-                # Exportar con configuración de calidad
-                cleaned_audio.export(
+                success = merge_segments_with_ffmpeg(
+                    temp_input,
+                    nonsilent_segments,
                     temp_output,
-                    format="mp3",
-                    bitrate="192k",  # Calidad alta (192 kbps)
-                    parameters=["-q:a", "2"]  # Calidad VBR de ffmpeg (0-9, 2 es alta)
+                    keep_silence
                 )
 
+                if not success:
+                    st.error("❌ Error al procesar el audio")
+                    st.stop()
 
-                # ============ PASO 6: Mostrar resultados ============
+                # Obtener duración final
+                cleaned_duration = get_audio_duration(temp_output)
+                time_saved = original_duration - cleaned_duration
+
                 st.success("✅ ¡Procesamiento completado exitosamente!")
 
                 # Estadísticas
-                original_duration = len(audio) / 1000  # Convertir a segundos
-                cleaned_duration = len(cleaned_audio) / 1000
-                time_saved = original_duration - cleaned_duration
-
                 col1, col2, col3 = st.columns(3)
                 col1.metric("⏱️ Duración Original", f"{original_duration:.1f}s")
                 col2.metric("⏱️ Duración Final", f"{cleaned_duration:.1f}s")
@@ -190,21 +309,16 @@ if uploaded_file is not None:
 
                 st.divider()
 
-
-                # ============ PASO 7: Reproductor de audio ============
+                # Reproductor
                 st.subheader("🎧 Paso 2: Escucha el resultado")
-
                 with open(temp_output, "rb") as audio_file:
                     audio_bytes = audio_file.read()
                     st.audio(audio_bytes, format="audio/mp3")
 
                 st.divider()
 
-
-                # ============ PASO 8: Descarga ============
+                # Descarga
                 st.subheader("📥 Paso 3: Descarga tu archivo")
-
-                # Generar nombre de archivo de salida
                 original_name = os.path.splitext(uploaded_file.name)[0]
                 output_filename = f"{original_name}_limpio.mp3"
 
@@ -218,31 +332,26 @@ if uploaded_file is not None:
 
                 st.success(f"💾 Listo para descargar: **{output_filename}**")
 
-
-        # ============ MANEJO DE ERRORES ============
         except Exception as e:
             st.error(f"❌ Error durante el procesamiento: {str(e)}")
             st.info("""
             **Posibles causas:**
             - El archivo está corrupto o no es válido
             - Formato de archivo no soportado correctamente
-            - Problema con ffmpeg (necesario para procesar videos)
+            - Problema con ffmpeg
 
             **Soluciones:**
             - Intenta con otro archivo
             - Verifica que el archivo no esté dañado
-            - Asegúrate de que ffmpeg esté instalado
             """)
 
-
-        # ============ LIMPIEZA DE ARCHIVOS TEMPORALES ============
         finally:
-            # Eliminar archivos temporales para no saturar el disco
+            # Limpieza
             if temp_input and os.path.exists(temp_input):
                 try:
                     os.unlink(temp_input)
                 except:
-                    pass  # Si no se puede eliminar, no es crítico
+                    pass
 
             if temp_output and os.path.exists(temp_output):
                 try:
@@ -256,8 +365,8 @@ st.divider()
 st.markdown("""
 <div style='text-align: center; color: #666;'>
     <small>
-        🚀 Desarrollado con Streamlit y pydub |
-        💡 Requiere ffmpeg para procesamiento de videos
+        🚀 Desarrollado con Streamlit y ffmpeg |
+        💡 Usa ffmpeg directamente para máxima compatibilidad
     </small>
 </div>
 """, unsafe_allow_html=True)
