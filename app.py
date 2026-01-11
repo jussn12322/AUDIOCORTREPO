@@ -14,7 +14,8 @@ import json
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
-import sqlite3
+import psycopg2
+from psycopg2 import sql, extras
 import base64
 from datetime import datetime
 
@@ -32,51 +33,89 @@ if 'history' not in st.session_state:
 
 
 # ======================== FUNCIONES DE BASE DE DATOS ========================
+def get_db_connection():
+    """
+    Obtiene conexión a la base de datos PostgreSQL (Supabase).
+    """
+    try:
+        # Intentar obtener credenciales de Streamlit secrets (producción)
+        if hasattr(st, 'secrets') and 'supabase' in st.secrets:
+            conn = psycopg2.connect(
+                host=st.secrets["supabase"]["host"],
+                database=st.secrets["supabase"]["database"],
+                user=st.secrets["supabase"]["user"],
+                password=st.secrets["supabase"]["password"],
+                port=st.secrets["supabase"]["port"]
+            )
+        else:
+            # Fallback: intentar con variables de entorno o conexión local
+            # Para desarrollo local, puedes usar archivo .env
+            st.error("⚠️ No se encontraron credenciales de Supabase. Configúralas en Streamlit Cloud.")
+            return None
+
+        return conn
+    except Exception as e:
+        st.error(f"Error conectando a la base de datos: {e}")
+        return None
+
+
 def init_database():
     """
-    Inicializa la base de datos SQLite para almacenar el historial.
+    Inicializa la base de datos PostgreSQL para almacenar el historial.
     """
-    conn = sqlite3.connect('audiocort_history.db')
-    cursor = conn.cursor()
+    conn = get_db_connection()
+    if not conn:
+        return
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            filename TEXT NOT NULL,
-            audio_data BLOB NOT NULL,
-            original_duration REAL NOT NULL,
-            cleaned_duration REAL NOT NULL,
-            time_saved REAL NOT NULL,
-            timestamp TEXT NOT NULL,
-            umbral_silencio INTEGER NOT NULL,
-            duracion_minima INTEGER NOT NULL,
-            padding INTEGER NOT NULL
-        )
-    ''')
+    try:
+        cursor = conn.cursor()
 
-    conn.commit()
-    conn.close()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS history (
+                id SERIAL PRIMARY KEY,
+                filename TEXT NOT NULL,
+                audio_data BYTEA NOT NULL,
+                original_duration REAL NOT NULL,
+                cleaned_duration REAL NOT NULL,
+                time_saved REAL NOT NULL,
+                timestamp TIMESTAMP NOT NULL,
+                umbral_silencio INTEGER NOT NULL,
+                duracion_minima INTEGER NOT NULL,
+                padding INTEGER NOT NULL
+            )
+        ''')
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"Error inicializando base de datos: {e}")
+        if conn:
+            conn.close()
 
 
 def save_to_database(filename, audio_bytes, original_duration, cleaned_duration,
                      silence_thresh, min_silence_len, keep_silence):
     """
-    Guarda un audio procesado en la base de datos.
+    Guarda un audio procesado en la base de datos PostgreSQL.
     """
+    conn = get_db_connection()
+    if not conn:
+        return False
+
     try:
-        conn = sqlite3.connect('audiocort_history.db')
         cursor = conn.cursor()
 
         time_saved = original_duration - cleaned_duration
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now()
 
         cursor.execute('''
             INSERT INTO history (
                 filename, audio_data, original_duration, cleaned_duration,
                 time_saved, timestamp, umbral_silencio, duracion_minima, padding
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ''', (
-            filename, audio_bytes, original_duration, cleaned_duration,
+            filename, psycopg2.Binary(audio_bytes), original_duration, cleaned_duration,
             time_saved, timestamp, silence_thresh, min_silence_len, keep_silence
         ))
 
@@ -90,20 +129,26 @@ def save_to_database(filename, audio_bytes, original_duration, cleaned_duration,
         ''')
 
         conn.commit()
+        cursor.close()
         conn.close()
         return True
     except Exception as e:
         st.error(f"Error al guardar en base de datos: {e}")
+        if conn:
+            conn.close()
         return False
 
 
 def load_from_database():
     """
-    Carga el historial desde la base de datos.
+    Carga el historial desde la base de datos PostgreSQL.
     Retorna lista de diccionarios con la información.
     """
+    conn = get_db_connection()
+    if not conn:
+        return []
+
     try:
-        conn = sqlite3.connect('audiocort_history.db')
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -115,17 +160,22 @@ def load_from_database():
         ''')
 
         rows = cursor.fetchall()
+        cursor.close()
         conn.close()
 
         history = []
         for row in rows:
+            # Convertir BYTEA a bytes y timestamp a string
+            audio_data = bytes(row[1]) if row[1] else b''
+            timestamp_str = row[5].strftime("%Y-%m-%d %H:%M:%S") if row[5] else ""
+
             history.append({
                 'filename': row[0],
-                'audio_data': row[1],
+                'audio_data': audio_data,
                 'original_duration': row[2],
                 'cleaned_duration': row[3],
                 'time_saved': row[4],
-                'timestamp': row[5],
+                'timestamp': timestamp_str,
                 'settings': {
                     'umbral_silencio': row[6],
                     'duracion_minima': row[7],
@@ -140,17 +190,23 @@ def load_from_database():
 
 def clear_database():
     """
-    Limpia todo el historial de la base de datos.
+    Limpia todo el historial de la base de datos PostgreSQL.
     """
+    conn = get_db_connection()
+    if not conn:
+        return False
+
     try:
-        conn = sqlite3.connect('audiocort_history.db')
         cursor = conn.cursor()
         cursor.execute('DELETE FROM history')
         conn.commit()
+        cursor.close()
         conn.close()
         return True
     except Exception as e:
         st.error(f"Error al limpiar base de datos: {e}")
+        if conn:
+            conn.close()
         return False
 
 

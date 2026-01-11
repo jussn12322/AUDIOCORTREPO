@@ -7,3 +7,6 @@ streamlit>=1.31.0
 # Bibliotecas para visualización de audio
 matplotlib>=3.7.0
 numpy>=1.24.0
+
+# Base de datos PostgreSQL (Supabase)
+psycopg2-binary>=2.9.9
