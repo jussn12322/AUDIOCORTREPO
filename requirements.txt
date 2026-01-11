@@ -3,11 +3,3 @@
 
 # Framework web para la interfaz de usuario
 streamlit>=1.31.0
-
-# Biblioteca para manipulación de audio
-# Permite cargar, editar, detectar silencios y exportar audio
-# Requiere ffmpeg instalado en el sistema para trabajar con múltiples formatos
-pydub>=0.25.1
-
-# Dependencias adicionales para compatibilidad con Python 3.11
-numpy>=1.24.0,<2.0.0
