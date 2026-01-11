@@ -125,6 +125,9 @@ dmypy.json
 # Streamlit
 .streamlit/
 
+# Base de datos local
+audiocort_history.db
+
 # Audio/Video files (temporales de prueba)
 *.mp4
 *.mov

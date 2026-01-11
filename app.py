@@ -14,6 +14,9 @@ import json
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
+import sqlite3
+import base64
+from datetime import datetime
 
 
 # ======================== CONFIGURACIÓN DE LA PÁGINA ========================
@@ -26,6 +29,133 @@ st.set_page_config(
 # ======================== INICIALIZAR SESSION STATE ========================
 if 'history' not in st.session_state:
     st.session_state.history = []
+
+
+# ======================== FUNCIONES DE BASE DE DATOS ========================
+def init_database():
+    """
+    Inicializa la base de datos SQLite para almacenar el historial.
+    """
+    conn = sqlite3.connect('audiocort_history.db')
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            audio_data BLOB NOT NULL,
+            original_duration REAL NOT NULL,
+            cleaned_duration REAL NOT NULL,
+            time_saved REAL NOT NULL,
+            timestamp TEXT NOT NULL,
+            umbral_silencio INTEGER NOT NULL,
+            duracion_minima INTEGER NOT NULL,
+            padding INTEGER NOT NULL
+        )
+    ''')
+
+    conn.commit()
+    conn.close()
+
+
+def save_to_database(filename, audio_bytes, original_duration, cleaned_duration,
+                     silence_thresh, min_silence_len, keep_silence):
+    """
+    Guarda un audio procesado en la base de datos.
+    """
+    try:
+        conn = sqlite3.connect('audiocort_history.db')
+        cursor = conn.cursor()
+
+        time_saved = original_duration - cleaned_duration
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        cursor.execute('''
+            INSERT INTO history (
+                filename, audio_data, original_duration, cleaned_duration,
+                time_saved, timestamp, umbral_silencio, duracion_minima, padding
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            filename, audio_bytes, original_duration, cleaned_duration,
+            time_saved, timestamp, silence_thresh, min_silence_len, keep_silence
+        ))
+
+        conn.commit()
+
+        # Mantener solo los últimos 10 registros
+        cursor.execute('''
+            DELETE FROM history WHERE id NOT IN (
+                SELECT id FROM history ORDER BY id DESC LIMIT 10
+            )
+        ''')
+
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Error al guardar en base de datos: {e}")
+        return False
+
+
+def load_from_database():
+    """
+    Carga el historial desde la base de datos.
+    Retorna lista de diccionarios con la información.
+    """
+    try:
+        conn = sqlite3.connect('audiocort_history.db')
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT filename, audio_data, original_duration, cleaned_duration,
+                   time_saved, timestamp, umbral_silencio, duracion_minima, padding
+            FROM history
+            ORDER BY id DESC
+            LIMIT 10
+        ''')
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        history = []
+        for row in rows:
+            history.append({
+                'filename': row[0],
+                'audio_data': row[1],
+                'original_duration': row[2],
+                'cleaned_duration': row[3],
+                'time_saved': row[4],
+                'timestamp': row[5],
+                'settings': {
+                    'umbral_silencio': row[6],
+                    'duracion_minima': row[7],
+                    'padding': row[8]
+                }
+            })
+
+        return history
+    except Exception as e:
+        return []
+
+
+def clear_database():
+    """
+    Limpia todo el historial de la base de datos.
+    """
+    try:
+        conn = sqlite3.connect('audiocort_history.db')
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM history')
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.error(f"Error al limpiar base de datos: {e}")
+        return False
+
+
+# Inicializar base de datos al cargar la app
+init_database()
 
 
 # ======================== FUNCIONES AUXILIARES ========================
@@ -303,34 +433,6 @@ def visualize_segments(audio_file, total_duration, segments, padding_ms):
     return fig
 
 
-def add_to_history(filename, audio_bytes, original_duration, cleaned_duration,
-                   silence_thresh, min_silence_len, keep_silence):
-    """
-    Agrega un audio procesado al historial.
-    Mantiene solo los últimos 10 elementos.
-    """
-    import datetime
-
-    history_item = {
-        'filename': filename,
-        'audio_data': audio_bytes,
-        'original_duration': original_duration,
-        'cleaned_duration': cleaned_duration,
-        'time_saved': original_duration - cleaned_duration,
-        'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        'settings': {
-            'umbral_silencio': silence_thresh,
-            'duracion_minima': min_silence_len,
-            'padding': keep_silence
-        }
-    }
-
-    # Agregar al inicio de la lista
-    st.session_state.history.insert(0, history_item)
-
-    # Mantener solo los últimos 10
-    if len(st.session_state.history) > 10:
-        st.session_state.history = st.session_state.history[:10]
 
 
 # ======================== TÍTULO Y DESCRIPCIÓN ========================
@@ -385,10 +487,13 @@ st.sidebar.info("💡 **Tip:** Si el audio resultante tiene cortes bruscos, aume
 st.sidebar.divider()
 st.sidebar.header("📜 Historial de Procesamiento")
 
-if len(st.session_state.history) > 0:
-    st.sidebar.markdown(f"**{len(st.session_state.history)} archivo(s) procesado(s)**")
+# Cargar historial desde la base de datos
+history_items = load_from_database()
 
-    for idx, item in enumerate(st.session_state.history):
+if len(history_items) > 0:
+    st.sidebar.markdown(f"**{len(history_items)} archivo(s) procesado(s)**")
+
+    for idx, item in enumerate(history_items):
         with st.sidebar.expander(f"🎵 {item['filename'][:25]}...", expanded=False):
             st.markdown(f"**Procesado:** {item['timestamp']}")
             st.markdown(f"**Duración Original:** {item['original_duration']:.1f}s")
@@ -416,8 +521,9 @@ if len(st.session_state.history) > 0:
 
     # Botón para limpiar historial
     if st.sidebar.button("🗑️ Limpiar Historial", type="secondary"):
-        st.session_state.history = []
-        st.rerun()
+        if clear_database():
+            st.success("Historial limpiado exitosamente")
+            st.rerun()
 
 else:
     st.sidebar.info("No hay archivos procesados aún")
@@ -542,8 +648,8 @@ if uploaded_file is not None:
 
                 st.success(f"💾 Listo para descargar: **{output_filename}**")
 
-                # Agregar al historial
-                add_to_history(
+                # Guardar en base de datos
+                save_to_database(
                     uploaded_file.name,
                     audio_bytes,
                     original_duration,
